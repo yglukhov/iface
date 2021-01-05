@@ -46,8 +46,12 @@ template forceReturnValue(retType: typed, someCall: typed): untyped =
   else:
     return someCall
 
-var interfaceDecls {.compileTime.} = initTable[string, NimNode]()
-var constructorDecls {.compileTime.} = initTable[string, NimNode]()
+type
+  InterfaceReflection = object
+    decl: NimNode
+    constr: NimNode
+
+var interfaceReflection {.compileTime.} = initTable[string, InterfaceReflection]()
 
 proc getInterfaceKey(sym: NimNode): string =
   let t = getTypeImpl(sym)
@@ -57,9 +61,7 @@ proc getInterfaceKey(sym: NimNode): string =
   signatureHash(t[1])
 
 macro registerInterfaceDecl(sym: typed, body: untyped, constr: untyped) =
-  let k = getInterfaceKey(sym)
-  interfaceDecls[k] = body
-  constructorDecls[k] = constr
+  interfaceReflection[getInterfaceKey(sym)] = InterfaceReflection(decl: body, constr: constr)
 
 proc to*[T: ref](a: T, I: typedesc[Interface]): I {.inline.} =
   when T is I:
@@ -67,14 +69,24 @@ proc to*[T: ref](a: T, I: typedesc[Interface]): I {.inline.} =
   else:
     I(private_vTable: getVTable(I.VTable, T), private_obj: packObj(a))
 
-proc parseIfaceDef(def: NimNode): tuple[name: string, genericParams: NimNode] =
+proc parseIfaceDef(def: NimNode): tuple[name: string, genericParams, parent: NimNode] =
   if def.kind == nnkBracketExpr:
     result.name = $def[0]
+    result.parent = newEmptyNode()
     result.genericParams = newNimNode(nnkGenericParams)
     for i in 1 ..< def.len:
       result.genericParams.add(newIdentDefs(def[i], newEmptyNode()))
+  elif def.kind == nnkInfix:
+    if def.len == 3 and $def[0] == "of":
+      let (n, g, _) = parseIfaceDef(def[1])
+      result.name = n
+      result.parent = def[2]
+      result.genericParams = g
+    else:
+      assert(false, "Unexpected node")
   else:
     result.name = $def
+    result.parent = newEmptyNode()
     result.genericParams = newEmptyNode()
 
 proc genericParamsToBracket(subj, params: NimNode): NimNode =
@@ -91,7 +103,7 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
   result = newNimNode(nnkStmtList)
 
   let
-    (name, genericParams) = parseIfaceDef(def)
+    (name, genericParams, parent) = parseIfaceDef(def)
     iName = ident(name)
     iNameWithGenericParams = genericParamsToBracket(iName, genericParams)
     converterName = ident("to" & name)
@@ -182,10 +194,10 @@ macro iface*(name: untyped, body: untyped): untyped =
   # echo repr result
 
 proc getInterfaceDecl*(interfaceTypedescSym: NimNode): NimNode =
-  interfaceDecls[getInterfaceKey(interfaceTypedescSym)]
+  interfaceReflection[getInterfaceKey(interfaceTypedescSym)].decl
 
 macro localIfaceConvert*(ifaceType: typedesc[Interface], o: typed): untyped =
-  let constr = constructorDecls[getInterfaceKey(ifaceType)]
+  let constr = interfaceReflection[getInterfaceKey(ifaceType)].constr
   let genericT = ident"TIfaceUnpackedThis#"
   result = quote do:
     type `genericT` = type(`o`)
