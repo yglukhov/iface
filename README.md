@@ -6,6 +6,7 @@ Nim `method`s no longer needed :).
 - Works with default GC and `--gc:orc`.
 - Works with all nim backends
 - Works in VM (compile time or nimscript)
+- Works across DLL boundaries
 - Provides compile time reflection API, which can be used for e.g. auto-generating proxy RPC callers/servers and such
 - Allows generic interfaces. [Example](tests/test2_generics.nim).
 
