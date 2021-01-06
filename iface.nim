@@ -48,8 +48,10 @@ template forceReturnValue(retType: typed, someCall: typed): untyped =
 
 type
   InterfaceReflection = object
-    decl: NimNode
+    body: NimNode
     constr: NimNode
+    genericParams: NimNode
+    parent: NimNode
 
 var interfaceReflection {.compileTime.} = initTable[string, InterfaceReflection]()
 
@@ -60,8 +62,8 @@ proc getInterfaceKey(sym: NimNode): string =
   assert t[0].eqIdent("typedesc")
   signatureHash(t[1])
 
-macro registerInterfaceDecl(sym: typed, body: untyped, constr: untyped) =
-  interfaceReflection[getInterfaceKey(sym)] = InterfaceReflection(decl: body, constr: constr)
+macro registerInterfaceDecl(sym: typed, body, constr: untyped) =
+  interfaceReflection[getInterfaceKey(sym)] = InterfaceReflection(body: body, constr: constr)
 
 proc to*[T: ref](a: T, I: typedesc[Interface]): I {.inline.} =
   when T is I:
@@ -69,25 +71,33 @@ proc to*[T: ref](a: T, I: typedesc[Interface]): I {.inline.} =
   else:
     I(private_vTable: getVTable(I.VTable, T), private_obj: packObj(a))
 
-proc parseIfaceDef(def: NimNode): tuple[name: string, genericParams, parent: NimNode] =
+proc parseIfaceDef(def: NimNode): tuple[name: string, genericParams, parent: NimNode, isPublic: bool] =
+  var def = def
+  result.genericParams = newEmptyNode()
+  result.parent = newEmptyNode()
+
+  if def.kind == nnkInfix:
+    if def.len == 3 and $def[0] == "of":
+      result.parent = def[2]
+      def = def[1]
+    else:
+      assert(false, "Unexpected node")
+
+  if def.kind == nnkPrefix:
+    if def.len == 2 and $def[0] == "*":
+      result.isPublic = true
+      def = def[1]
+    else:
+      assert(false, "Unexpected node")
+
   if def.kind == nnkBracketExpr:
-    result.name = $def[0]
-    result.parent = newEmptyNode()
     result.genericParams = newNimNode(nnkGenericParams)
     for i in 1 ..< def.len:
       result.genericParams.add(newIdentDefs(def[i], newEmptyNode()))
-  elif def.kind == nnkInfix:
-    if def.len == 3 and $def[0] == "of":
-      let (n, g, _) = parseIfaceDef(def[1])
-      result.name = n
-      result.parent = def[2]
-      result.genericParams = g
-    else:
-      assert(false, "Unexpected node")
-  else:
-    result.name = $def
-    result.parent = newEmptyNode()
-    result.genericParams = newEmptyNode()
+
+    def = def[0]
+
+  result.name = $def
 
 proc genericParamsToBracket(subj, params: NimNode): NimNode =
   params.expectKind({nnkEmpty, nnkGenericParams})
@@ -103,7 +113,7 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
   result = newNimNode(nnkStmtList)
 
   let
-    (name, genericParams, parent) = parseIfaceDef(def)
+    (name, genericParams, parent, isPublic) = parseIfaceDef(def)
     iName = ident(name)
     iNameWithGenericParams = genericParamsToBracket(iName, genericParams)
     converterName = ident("to" & name)
@@ -168,7 +178,9 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
 
   vTableType = newTree(nnkTypeSection, newTree(nnkTypeDef, vTableTypeName, genericParams, newTree(nnkObjectTy, newEmptyNode(), newEmptyNode(), vTableType)))
 
-  let interfaceType =  newTree(nnkTypeSection, newTree(nnkTypeDef, iName, genericParams, newTree(nnkBracketExpr, ident"Interface", vTableTypeWithGenericParams)))
+  let iTy = if isPublic: newTree(nnkPostfix, ident"*", iName)
+            else: iName
+  let interfaceType =  newTree(nnkTypeSection, newTree(nnkTypeDef, iTy, genericParams, newTree(nnkBracketExpr, ident"Interface", vTableTypeWithGenericParams)))
   let initVTableProc = newProc(ident"initVTable", params = [newEmptyNode(), newIdentDefs(tIdent, newTree(nnkVarTy, vTableTypeWithGenericParams)), newIdentDefs(genericT, ident"typedesc")])
   initVTableProc[2] = genericParams
   initVTableProc.body = quote do:
@@ -194,7 +206,7 @@ macro iface*(name: untyped, body: untyped): untyped =
   # echo repr result
 
 proc getInterfaceDecl*(interfaceTypedescSym: NimNode): NimNode =
-  interfaceReflection[getInterfaceKey(interfaceTypedescSym)].decl
+  interfaceReflection[getInterfaceKey(interfaceTypedescSym)].body
 
 macro localIfaceConvert*(ifaceType: typedesc[Interface], o: typed): untyped =
   let constr = interfaceReflection[getInterfaceKey(ifaceType)].constr

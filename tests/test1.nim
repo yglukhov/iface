@@ -24,7 +24,7 @@ proc createVoldemortObject(): Animal =
   localIfaceConvert(Animal, Hidden())
 
 suite "iface":
-  test "runtim":
+  test "runtime":
     let d = Dog.new()
     check doSmth(d) == "bark"
     check d.testCalled
@@ -40,6 +40,6 @@ suite "iface":
   test "implement interface in proc (voldemort)":
     check doSmth(createVoldemortObject()) == "hsss"
 
-  test "implement interface in proc (voldemort)":
+  test "implement interface in proc (voldemort) compile time":
     const d = doSmth(createVoldemortObject())
     check d == "hsss"
