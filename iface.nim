@@ -126,8 +126,7 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
     mixins = newNimNode(nnkStmtList)
     upackedThis = ident"ifaceUnpackedThis#"
     ifaceDecl = newNimNode(nnkStmtList)
-
-  var vTableType = newNimNode(nnkRecList)
+    vTableType = newNimNode(nnkRecList)
 
   for i, p in body:
     if p.kind in {nnkCommentStmt}: continue
@@ -176,11 +175,17 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
 
     functions.add(p)
 
-  vTableType = newTree(nnkTypeSection, newTree(nnkTypeDef, vTableTypeName, genericParams, newTree(nnkObjectTy, newEmptyNode(), newEmptyNode(), vTableType)))
-
   let iTy = if isPublic: newTree(nnkPostfix, ident"*", iName)
             else: iName
-  let interfaceType =  newTree(nnkTypeSection, newTree(nnkTypeDef, iTy, genericParams, newTree(nnkBracketExpr, ident"Interface", vTableTypeWithGenericParams)))
+
+  let typeSection = newTree(nnkTypeSection)
+
+  # Add interface type definition
+  typeSection.add newTree(nnkTypeDef, iTy, genericParams, newTree(nnkBracketExpr, ident"Interface", vTableTypeWithGenericParams))
+
+  # Add vTable type definition
+  typeSection.add newTree(nnkTypeDef, vTableTypeName, genericParams, newTree(nnkObjectTy, newEmptyNode(), newEmptyNode(), vTableType))
+
   let initVTableProc = newProc(ident"initVTable", params = [newEmptyNode(), newIdentDefs(tIdent, newTree(nnkVarTy, vTableTypeWithGenericParams)), newIdentDefs(genericT, ident"typedesc")])
   initVTableProc[2] = genericParams
   initVTableProc.body = quote do:
@@ -188,8 +193,7 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
     `vTableConstr`
 
   result.add quote do:
-    `vTableType`
-    `interfaceType`
+    `typeSection`
     `initVTableProc`
     `functions`
 

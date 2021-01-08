@@ -3,6 +3,7 @@ import iface, unittest
 iface Animal:
   proc say(): string
   proc test2()
+  proc getFriend(): Animal
 
 type
   Dog = ref object of RootRef
@@ -11,6 +12,10 @@ type
 proc say(d: Dog): string = "bark"
 proc test2(d: Dog) =
   d.testCalled = true
+
+proc getFriend(d: Dog): Animal =
+  d.testCalled = true
+  return toAnimal(Dog())
 
 proc doSmth(a: Animal): string =
   a.test2()
@@ -21,6 +26,7 @@ proc createVoldemortObject(): Animal =
     Hidden = ref object of RootRef
   proc say(h: Hidden): string = "hsss"
   proc test2(h: Hidden) = discard
+  proc getFriend(h: Hidden): Animal = discard
   localIfaceConvert(Animal, Hidden())
 
 suite "iface":
