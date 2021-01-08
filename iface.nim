@@ -109,6 +109,12 @@ proc genericParamsToBracket(subj, params: NimNode): NimNode =
       p.expectKind(nnkIdentDefs)
       result.add(p[0])
 
+proc makePublic(name: NimNode, isPublic: bool): NimNode =
+  if isPublic:
+    newTree(nnkPostfix, ident"*", name)
+  else:
+    name
+
 proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
   result = newNimNode(nnkStmtList)
 
@@ -116,7 +122,7 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
     (name, genericParams, parent, isPublic) = parseIfaceDef(def)
     iName = ident(name)
     iNameWithGenericParams = genericParamsToBracket(iName, genericParams)
-    converterName = ident("to" & name)
+    converterName = makePublic(ident("to" & name), isPublic)
     vTableTypeName = ident("InterfaceVTable" & name)
     vTableTypeWithGenericParams = genericParamsToBracket(vTableTypeName, genericParams)
     tIdent = ident"t"
@@ -139,7 +145,7 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
     if retType.kind == nnkEmpty: retType = ident"void"
     pt[0].insert(1, newIdentDefs(ident"this", ident"RootRef"))
     let fieldName = ident("<" & $i & ">" & $p.name)
-    vTableType.add(newIdentDefs(fieldName, pt))
+    vTableType.add(newIdentDefs(makePublic(fieldName, isPublic), pt))
 
     let lambdaCall = newCall(p.name)
     lambdaCall.add(upackedThis)
@@ -163,6 +169,8 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
 
     vTableConstr.add newAssignment(newDotExpr(tIdent, fieldName), lam)
 
+    p.name = makePublic(p.name, isPublic)
+
     if p[2].kind != nnkEmpty:
       error("interface proc can not be generic (but interface can)", p[2])
     p[2] = genericParams
@@ -175,18 +183,15 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
 
     functions.add(p)
 
-  let iTy = if isPublic: newTree(nnkPostfix, ident"*", iName)
-            else: iName
-
   let typeSection = newTree(nnkTypeSection)
 
   # Add interface type definition
-  typeSection.add newTree(nnkTypeDef, iTy, genericParams, newTree(nnkBracketExpr, ident"Interface", vTableTypeWithGenericParams))
+  typeSection.add newTree(nnkTypeDef, makePublic(iName, isPublic), genericParams, newTree(nnkBracketExpr, ident"Interface", vTableTypeWithGenericParams))
 
   # Add vTable type definition
   typeSection.add newTree(nnkTypeDef, vTableTypeName, genericParams, newTree(nnkObjectTy, newEmptyNode(), newEmptyNode(), vTableType))
 
-  let initVTableProc = newProc(ident"initVTable", params = [newEmptyNode(), newIdentDefs(tIdent, newTree(nnkVarTy, vTableTypeWithGenericParams)), newIdentDefs(genericT, ident"typedesc")])
+  let initVTableProc = newProc(makePublic(ident"initVTable", isPublic), params = [newEmptyNode(), newIdentDefs(tIdent, newTree(nnkVarTy, vTableTypeWithGenericParams)), newIdentDefs(genericT, ident"typedesc")])
   initVTableProc[2] = genericParams
   initVTableProc.body = quote do:
     `mixins`

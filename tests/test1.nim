@@ -1,9 +1,6 @@
 import iface, unittest
 
-iface Animal:
-  proc say(): string
-  proc test2()
-  proc getFriend(): Animal
+import more/animal
 
 type
   Dog = ref object of RootRef
