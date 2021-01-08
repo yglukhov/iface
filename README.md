@@ -1,4 +1,4 @@
-# iface - Dynamic dispatch on steroids ![build status](https://github.com/yglukhov/iface/workflows/test/badge.svg)
+# iface - Dynamic dispatch on steroids ![build status](https://github.com/yglukhov/iface/workflows/CI/badge.svg)
 
 Nim `method`s no longer needed :).
 
