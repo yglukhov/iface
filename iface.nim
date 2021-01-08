@@ -71,14 +71,14 @@ proc to*[T: ref](a: T, I: typedesc[Interface]): I {.inline.} =
   else:
     I(private_vTable: getVTable(I.VTable, T), private_obj: packObj(a))
 
-proc parseIfaceDef(def: NimNode): tuple[name: string, genericParams, parent: NimNode, isPublic: bool] =
-  var def = def
+proc parseArgs(arg1, arg2, moreArgs: NimNode): tuple[name: string, genericParams: NimNode, isPublic: bool, parents, body: NimNode] =
+  var def = arg1
   result.genericParams = newEmptyNode()
-  result.parent = newEmptyNode()
+  result.parents = newEmptyNode()
 
   if def.kind == nnkInfix:
     if def.len == 3 and $def[0] == "of":
-      result.parent = def[2]
+      result.parents = newTree(nnkStmtList, def[2])
       def = def[1]
     else:
       assert(false, "Unexpected node")
@@ -99,6 +99,15 @@ proc parseIfaceDef(def: NimNode): tuple[name: string, genericParams, parent: Nim
 
   result.name = $def
 
+  if moreArgs.len == 0:
+    result.body = arg2
+  else:
+    result.body = moreArgs[^1]
+    doAssert(result.parents.len == 1, "Unexpected parents")
+    result.parents.add(arg2)
+    for i in 0 ..< moreArgs.len - 1:
+      result.parents.add(moreArgs[i])
+
 proc genericParamsToBracket(subj, params: NimNode): NimNode =
   params.expectKind({nnkEmpty, nnkGenericParams})
   if params.kind == nnkEmpty:
@@ -115,11 +124,13 @@ proc makePublic(name: NimNode, isPublic: bool): NimNode =
   else:
     name
 
-proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
+proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, body: NimNode, addConverter: bool): NimNode =
   result = newNimNode(nnkStmtList)
 
+  if parents.len != 0:
+    error "Interface inheritance is not implemented yet", parents[0]
+
   let
-    (name, genericParams, parent, isPublic) = parseIfaceDef(def)
     iName = ident(name)
     iNameWithGenericParams = genericParamsToBracket(iName, genericParams)
     converterName = makePublic(ident("to" & name), isPublic)
@@ -210,8 +221,9 @@ proc ifaceImpl*(def: NimNode, body: NimNode, addConverter: bool): NimNode =
   result.add quote do:
     registerInterfaceDecl(`iName`, `ifaceDecl`, `vTableConstr`)
 
-macro iface*(name: untyped, body: untyped): untyped =
-  result = ifaceImpl(name, body, true)
+macro iface*(arg1, arg2: untyped, moreArgs: varargs[untyped]): untyped =
+  let (name, genericParams, isPublic, parents, body) = parseArgs(arg1, arg2, moreArgs)
+  result = ifaceImpl(name, genericParams, isPublic, parents, body, true)
   # echo repr result
 
 proc getInterfaceDecl*(interfaceTypedescSym: NimNode): NimNode =
@@ -240,3 +252,16 @@ macro ifaceFindMethodAux(ifaceType: typedesc[Interface], methodName: string): in
 proc ifaceFindMethod*(ifaceType: typedesc[Interface], methodName: string): int =
   # Returns index of method with name in the interface, or -1 if not found
   ifaceFindMethodAux(ifaceType, methodName)
+
+macro privateTestParseArgs*(arg1, arg2: untyped, moreArgs: varargs[untyped]): untyped =
+  let (name, genericParams, isPublic, parents, body) = parseArgs(arg1, arg2, moreArgs)
+  let sName = $name
+  let sGenericParams = repr genericParams
+  let sParents = repr parents
+  let sBody = repr body
+  result = quote do:
+    let name {.inject.} = `sName`
+    let genericParams {.inject.} = `sGenericParams`
+    let isPublic {.inject.} = bool(`isPublic`)
+    let parents {.inject.} = `sParents`
+    let body {.inject.} = `sBody`
