@@ -27,4 +27,3 @@ assert(doSmth(Dog()) == "bark") # Since Dog implements Animal it can be converte
 
 ### Caveats:
 - Converting to generic interfaces must be explicit, unlike example above. Above example should be rewritten as `Dog().to(MyGenericAnimal[int])`
-- Any `ref` type can implement an interface. However with `--gc:orc` only `RootRef` descendants are allowed, like in the example above. This limitation hopefully will be mitigated at some point.

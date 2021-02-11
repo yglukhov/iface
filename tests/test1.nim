@@ -46,3 +46,19 @@ suite "iface":
   test "implement interface in proc (voldemort) compile time":
     const d = doSmth(createVoldemortObject())
     check d == "hsss"
+
+  test "extract concrete type":
+    type Shark = ref object of RootObj
+    var i: Animal = Dog()
+    check i.to(Dog) != nil
+    check i.to(Shark) == nil
+    when not defined(js):
+      # Currently nim emits wrong JS code for this
+      check i.to(ref int) == nil
+
+  test "extract concrete type compile time":
+    type Shark = ref object of RootRef
+    const ok = static:
+      var i: Animal = Dog()
+      i.to(Dog) != nil and i.to(Shark) == nil and i.to(ref int) == nil
+    check ok
