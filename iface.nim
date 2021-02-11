@@ -17,22 +17,16 @@ proc getVTable(VTable: typedesc, T: typedesc): ptr VTable {.inline.} =
   addr tab
 
 template unpackObj[T](f: RootRef, res: var T) =
-  when nimvm:
-    res = CTWrapper[T](f).v
+  when T is RootRef:
+    res = T(f)
   else:
-    when defined(gcDestructors):
-      res = T(f)
-    else:
-      res = cast[T](cast[pointer](f))
+    res = CTWrapper[T](f).v
 
 proc packObj[T](v: T): RootRef {.inline.} =
-  when nimvm:
-    result = CTWrapper[T](v: v)
+  when T is RootRef:
+    result = RootRef(v)
   else:
-    when defined(gcDestructors):
-      result = RootRef(v)
-    else:
-      result = cast[RootRef](cast[pointer](v))
+    result = CTWrapper[T](v: v)
 
 macro checkRequiredMethod(call: typed, typ: typed): untyped =
   let impl = getImpl(call[0])
@@ -70,6 +64,19 @@ proc to*[T: ref](a: T, I: typedesc[Interface]): I {.inline.} =
     a
   else:
     I(private_vTable: getVTable(I.VTable, T), private_obj: packObj(a))
+
+proc to*[T: ref](i: Interface, t: typedesc[T]): t {.inline.} =
+  ## Extracts concrete type `t` from interface `i`, or `nil` if `i` is not of `t`
+  when t is RootRef:
+    if i.private_obj of t:
+      t(i.private_obj)
+    else:
+      nil
+  else:
+    if i.private_obj of CTWrapper[t]:
+      CTWrapper[t](i.private_obj).v
+    else:
+      nil
 
 proc parseArgs(arg1, arg2, moreArgs: NimNode): tuple[name: string, genericParams: NimNode, isPublic: bool, parents, body: NimNode] =
   var def = arg1
