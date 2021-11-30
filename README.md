@@ -5,7 +5,7 @@ Nim `method`s no longer needed :).
 - Go-like interfaces, implemented through fat pointers with vTbl. Allows implementing any interface for any (ref) type anywhere in the code.
 - Works with default GC and `--gc:orc`.
 - Works with all nim backends
-- Works in VM (compile time or nimscript)
+- ~~Works in VM (compile time or nimscript)~~ Currently blocked by [nim#16613](https://github.com/nim-lang/Nim/issues/16613) and [nim#18613](https://github.com/nim-lang/Nim/pull/18613)
 - Works across DLL boundaries
 - Provides compile time reflection API, which can be used for e.g. auto-generating proxy RPC callers/servers and such
 - Allows generic interfaces. [Example](tests/test2_generics.nim).

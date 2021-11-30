@@ -15,13 +15,7 @@ proc runTests(nimCmd = "c", nimFlags = "") =
   for f in oswalkdir.walkDir("tests"):
     let sf = f.path.splitFile()
     if sf.ext == ".nim":
-      var done = false
-      while not done:
-        try:
-          exec "nim " & nimCmd & " -r " & nimFlags & " " & f.path
-          done = true
-        except:
-          echo "Failed to compile. Is it beacuse of https://github.com/nim-lang/Nim/issues/16613 ???"
+      exec "nim " & nimCmd & " -r " & nimFlags & " " & f.path
 
 task test, "Run tests":
   runTests("c", "--gc:orc")
