@@ -228,7 +228,7 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
   result.add quote do:
     registerInterfaceDecl(`iName`, `ifaceDecl`, `vTableConstr`)
 
-macro iface*(arg1, arg2: untyped, moreArgs: varargs[untyped]): untyped =
+macro iface*(arg1, arg2: untyped, moreArgs: varargs[untyped] = []): untyped =
   let (name, genericParams, isPublic, parents, body) = parseArgs(arg1, arg2, moreArgs)
   result = ifaceImpl(name, genericParams, isPublic, parents, body, true)
   # echo repr result
@@ -260,7 +260,7 @@ proc ifaceFindMethod*(ifaceType: typedesc[Interface], methodName: string): int =
   # Returns index of method with name in the interface, or -1 if not found
   ifaceFindMethodAux(ifaceType, methodName)
 
-macro privateTestParseArgs*(arg1, arg2: untyped, moreArgs: varargs[untyped]): untyped =
+macro privateTestParseArgs*(arg1, arg2: untyped, moreArgs: varargs[untyped] = []): untyped =
   let (name, genericParams, isPublic, parents, body) = parseArgs(arg1, arg2, moreArgs)
   let sName = $name
   let sGenericParams = repr genericParams
