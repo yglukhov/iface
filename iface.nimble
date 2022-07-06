@@ -17,6 +17,9 @@ proc runTests(nimCmd = "c", nimFlags = "") =
     if sf.ext == ".nim":
       exec "nim " & nimCmd & " -r " & nimFlags & " " & f.path
 
+task testc, "Run tests":
+  runTests("c", "--gc:orc")
+
 task test, "Run tests":
   runTests("c", "--gc:orc")
   runTests("cpp", "--gc:orc")

@@ -34,36 +34,6 @@ proc bracketToCall(n: NimNode): NimNode {.compileTime.} =
   else:
     result = n
 
-macro implem*(t: untyped, ifaces: varargs[untyped]): untyped =
-  var genericParams: NimNode = nil
-
-  if t.kind == nnkBracketExpr:
-    genericParams = newNimNode(nnkGenericParams)
-    for i in 1 ..< t.len:
-      genericParams.add(newIdentDefs(t[i], newEmptyNode()))
-  else:
-    genericParams = newEmptyNode()
-  #genericParamsToBracket
-
-  #echo t.treeRepr
-  #echo genericParams.treeRepr
-  let tables = newTree(nnkBracket)
-  let t2 = bracketToCall(t)
-  for i, p in ifaces:
-    let p2 = bracketToCall(p)
-    let expr = quote:
-      ifaceVtable(`t2`, `p2`)
-    tables.add(expr)
-  var res = quote:
-    proc vtables*(t: typedesc[`t2`]): seq[RootRef] = @`tables`
-    discard
-    #when not compiles(vtables(`t2`)):
-    #  vtables(`t2`)
-    #  #raise newException(Defect, "Error defining VTable")
-  res[0][2] = genericParams
-  #echo res.treeRepr
-  res
-
 template unpackObj[T](f: RootRef, res: var T) =
   when T is RootRef:
     res = T(f)
@@ -93,19 +63,68 @@ type
     body: NimNode
     constr: NimNode
     genericParams: NimNode
-    parent: NimNode
+    parents: NimNode
 
 var interfaceReflection {.compileTime.} = initTable[string, InterfaceReflection]()
+
+proc getAllParents(sym: NimNode, parents: var seq[NimNode]) {.compileTime.} =
+  let implem = interfaceReflection[signatureHash(sym)]
+  for i, p in implem.parents:
+    parents.add(p)
+    getAllParents(p, parents)
 
 proc getInterfaceKey(sym: NimNode): string =
   let t = getTypeImpl(sym)
   expectKind(t, nnkBracketExpr)
   assert(t.len == 2)
   assert t[0].eqIdent("typedesc")
-  signatureHash(t[1])
+  result = signatureHash(t[1])
+  # echo "getInterfaceKey(" & sym.treeRepr & ") = " & result
 
-macro registerInterfaceDecl(sym: typed, body, constr: untyped) =
-  interfaceReflection[getInterfaceKey(sym)] = InterfaceReflection(body: body, constr: constr)
+macro registerInterfaceDecl(sym: typed, body, constr, parents: untyped) =
+  interfaceReflection[getInterfaceKey(sym)] = InterfaceReflection(body: body, constr: constr, parents: parents)
+
+proc getInterfaceDecl*(interfaceTypedescSym: NimNode): NimNode {.compileTime.} =
+  interfaceReflection[getInterfaceKey(interfaceTypedescSym)].body
+
+macro implemWrapper(ifaceSyms: typed, t: untyped, ifaces: varargs[untyped]): untyped =
+  var genericParams: NimNode = nil
+
+  if t.kind == nnkBracketExpr:
+    genericParams = newNimNode(nnkGenericParams)
+    for i in 1 ..< t.len:
+      genericParams.add(newIdentDefs(t[i], newEmptyNode()))
+  else:
+    genericParams = newEmptyNode()
+
+  #echo t.treeRepr
+  #echo genericParams.treeRepr
+  let tables = newTree(nnkBracket)
+  let t2 = bracketToCall(t)
+  for i, p in ifaces:
+    #var parents: seq[NimNode]
+    #getAllParents(p, parents)
+    let p2 = bracketToCall(p)
+    let expr = quote:
+      ifaceVtable(`t2`, `p2`)
+    tables.add(expr)
+  var res = quote:
+    proc vtables*(t: typedesc[`t2`]): seq[RootRef] = @`tables`
+    discard
+  res[0][2] = genericParams
+  #echo repr res
+  res
+
+proc extractTypeIdents(types: NimNode): NimNode =
+  result = nnkTupleConstr.newTree()
+  for i, t in types:
+    result.add(if t.kind == nnkBracketExpr: t[0] else: t)
+
+macro implem*(t: untyped, ifaces: varargs[untyped]): untyped =
+  let idents = extractTypeIdents(ifaces)
+  result = quote:
+    implemWrapper(`idents`, `t`)
+  for i, v in ifaces: result.add(v)
 
 proc to*[T: ref](a: T, I: typedesc[Interface]): I {.inline.} =
   when T is I:
@@ -188,15 +207,64 @@ proc makePublic(name: NimNode, isPublic: bool): NimNode =
   else:
     name
 
-proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, body: NimNode, addConverter: bool): NimNode =
-  result = newNimNode(nnkStmtList)
+proc ifaceImplProc(
+  p: NimNode, num: int,
+  iName, iParentName, upackedThis, genericT, tIdent, genericParams: NimNode,
+  mixins, vTableType, vTableConstr, functions: NimNode,
+  isPublic, isInherit: bool) =
+  mixins.add(newTree(nnkMixinStmt, p.name))
 
-  if parents.len != 0:
-    error "Interface inheritance is not implemented yet", parents[0]
+  let pt = newTree(nnkProcTy, copyNimTree(p.params), newEmptyNode())
+  pt.addPragma(ident"nimcall")
+  var retType = pt[0][0]
+  if retType.kind == nnkEmpty: retType = ident"void"
+  pt[0].insert(1, newIdentDefs(ident"this", ident"RootRef"))
+  let fieldName = ident("<" & $num & ">" & $p.name)
+  vTableType.add(newIdentDefs(makePublic(fieldName, isPublic), pt))
+
+  let lambdaCall = newCall(p.name)
+  lambdaCall.add(upackedThis)
+
+  let vCall = newTree(nnkCall, newTree(nnkDotExpr, newTree(nnkDotExpr, ident"this", ident"private_vTable"), fieldName))
+  vCall.add(newTree(nnkDotExpr, ident"this", ident"private_obj"))
+
+  for a in 1 ..< p.params.len:
+    let par = p.params[a]
+    for b in 0 .. par.len - 3:
+      lambdaCall.add(par[b])
+      vCall.add(par[b])
+
+  let lambdaBody = quote do:
+    var `upackedThis`: `genericT`
+    unpackObj(this, `upackedThis`)
+    forceReturnValue(`retType`, checkRequiredMethod(`lambdaCall`, `iName`))
+
+  let lam = newTree(nnkLambda, newEmptyNode(), newEmptyNode(), newEmptyNode(), pt[0], newEmptyNode(), newEmptyNode(), lambdaBody)
+  # lam.addPragma(newTree(nnkExprColonExpr, ident"stackTrace", ident"off"))
+
+  vTableConstr.add newAssignment(newDotExpr(tIdent, fieldName), lam)
+
+  p.name = makePublic(p.name, isPublic)
+
+  if not isInherit and p[2].kind != nnkEmpty:
+    error("interface proc can not be generic (but interface can)", p[2])
+  p[2] = genericParams
+
+  let iNameWithGenericParams = genericParamsToBracket(iName, genericParams)
+  p.params.insert(1, newIdentDefs(ident"this", iNameWithGenericParams))
+
+  p.body = vCall
+  p.addPragma(ident"inline")
+  p.addPragma(newTree(nnkExprColonExpr, ident"stackTrace", ident"off"))
+
+  if true or not isInherit:
+    functions.add(p)
+
+proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, parentSyms, body: NimNode, addConverter: bool): NimNode =
+  result = newNimNode(nnkStmtList)
 
   let
     iName = ident(name)
-    iNameWithGenericParams = genericParamsToBracket(iName, genericParams)
     converterName = makePublic(ident("to" & name), isPublic)
     vTableTypeName = ident("InterfaceVTable" & name)
     vTableTypeWithGenericParams = genericParamsToBracket(vTableTypeName, genericParams)
@@ -208,6 +276,26 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
     upackedThis = ident"ifaceUnpackedThis#"
     ifaceDecl = newNimNode(nnkStmtList)
     vTableType = newNimNode(nnkRecList)
+
+  var num = 0
+
+  if parents.len != 0:
+    #echo parents.treeRepr
+    for i, t in parents:
+      var iParentName = parentSyms[i]
+      let parentIfaceDecl = interfaceReflection[signatureHash(iParentName)].body
+      for j, p in parentIfaceDecl:
+        if p.kind in {nnkCommentStmt, nnkDiscardStmt, nnkEmpty}: continue
+        #echo p.treeRepr
+        p.expectKind(nnkProcDef)
+        ifaceDecl.add(copyNimTree(p))
+        ifaceImplProc(copyNimTree(p), num,
+                      iName, iParentName, upackedThis, genericT, tIdent, genericParams,
+                      mixins, vTableType, vTableConstr, functions,
+                      isPublic, true)
+        num += 1
+
+    #error "Interface inheritance is not implemented yet", parents[0]
 
   # Add private_vtables to vtable
   let lambdaCall = newCall(ident"vtables")
@@ -230,53 +318,14 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
       lambdaBody))
 
   for i, p in body:
-    if p.kind in {nnkCommentStmt}: continue
+    if p.kind in {nnkCommentStmt, nnkDiscardStmt, nnkEmpty}: continue
     p.expectKind(nnkProcDef)
     ifaceDecl.add(copyNimTree(p))
-    mixins.add(newTree(nnkMixinStmt, p.name))
-    let pt = newTree(nnkProcTy, copyNimTree(p.params), newEmptyNode())
-    pt.addPragma(ident"nimcall")
-    var retType = pt[0][0]
-    if retType.kind == nnkEmpty: retType = ident"void"
-    pt[0].insert(1, newIdentDefs(ident"this", ident"RootRef"))
-    let fieldName = ident("<" & $i & ">" & $p.name)
-    vTableType.add(newIdentDefs(makePublic(fieldName, isPublic), pt))
-
-    let lambdaCall = newCall(p.name)
-    lambdaCall.add(upackedThis)
-
-    let vCall = newTree(nnkCall, newTree(nnkDotExpr, newTree(nnkDotExpr, ident"this", ident"private_vTable"), fieldName))
-    vCall.add(newTree(nnkDotExpr, ident"this", ident"private_obj"))
-
-    for a in 1 ..< p.params.len:
-      let par = p.params[a]
-      for b in 0 .. par.len - 3:
-        lambdaCall.add(par[b])
-        vCall.add(par[b])
-
-    let lambdaBody = quote do:
-      var `upackedThis`: `genericT`
-      unpackObj(this, `upackedThis`)
-      forceReturnValue(`retType`, checkRequiredMethod(`lambdaCall`, `iName`))
-
-    let lam = newTree(nnkLambda, newEmptyNode(), newEmptyNode(), newEmptyNode(), pt[0], newEmptyNode(), newEmptyNode(), lambdaBody)
-    # lam.addPragma(newTree(nnkExprColonExpr, ident"stackTrace", ident"off"))
-
-    vTableConstr.add newAssignment(newDotExpr(tIdent, fieldName), lam)
-
-    p.name = makePublic(p.name, isPublic)
-
-    if p[2].kind != nnkEmpty:
-      error("interface proc can not be generic (but interface can)", p[2])
-    p[2] = genericParams
-
-    p.params.insert(1, newIdentDefs(ident"this", iNameWithGenericParams))
-
-    p.body = vCall
-    p.addPragma(ident"inline")
-    p.addPragma(newTree(nnkExprColonExpr, ident"stackTrace", ident"off"))
-
-    functions.add(p)
+    ifaceImplProc(p, num,
+                  iName, iName, upackedThis, genericT, tIdent, genericParams,
+                  mixins, vTableType, vTableConstr, functions,
+                  isPublic, false)
+    num += 1
 
   let typeSection = newTree(nnkTypeSection)
 
@@ -303,15 +352,19 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
         to(a, `iName`)
 
   result.add quote do:
-    registerInterfaceDecl(`iName`, `ifaceDecl`, `vTableConstr`)
+    registerInterfaceDecl(`iName`, `ifaceDecl`, `vTableConstr`, `parentSyms`)
+
+macro ifaceWrapper(parentSyms: typed, arg1, arg2: untyped, moreArgs: untyped = []): untyped =
+  let (name, genericParams, isPublic, parents, body) = parseArgs(arg1, arg2, moreArgs)
+  result = ifaceImpl(name, genericParams, isPublic, parents, parentSyms, body, true)
+  #echo repr result
 
 macro iface*(arg1, arg2: untyped, moreArgs: varargs[untyped] = []): untyped =
-  let (name, genericParams, isPublic, parents, body) = parseArgs(arg1, arg2, moreArgs)
-  result = ifaceImpl(name, genericParams, isPublic, parents, body, true)
-  # echo repr result
-
-proc getInterfaceDecl*(interfaceTypedescSym: NimNode): NimNode =
-  interfaceReflection[getInterfaceKey(interfaceTypedescSym)].body
+  let (name {.used.}, genericParams {.used.}, isPublic {.used.}, parents, body {.used.}) = parseArgs(arg1, arg2, moreArgs)
+  let parentIdents = extractTypeIdents(parents)
+  result = quote:
+    ifaceWrapper(`parentIdents`, `arg1`, `arg2`, `moreargs`)
+  #echo repr result
 
 macro localIfaceConvert*(ifaceType: typedesc[Interface], o: typed): untyped =
   let constr = interfaceReflection[getInterfaceKey(ifaceType)].constr

@@ -11,16 +11,12 @@ proc read*[T](self: Null[T], buffer: openArray[T]): Option[int] =
 proc write*[T](self: Null[T], buffer: openArray[T], num: var int) =
   num = buffer.len
 
-#proc vtables*[T](t: typedesc[Null[T]]): seq[RootRef] =
-#  result = @[
-#    ifaceVtable(Null[T], Reader[T]),
-#    ifaceVtable(Null[T], Writer[T]),
-#  ]
+proc close*[T](self: Null[T]) =
+  discard
 
-implem Null[T], Reader[T], Writer[T]
-
-proc vtables*() =
-  echo "foo"
+implem Null[T], Reader[T], Writer[T], Closer, WriteCloser[T]
+# TODO: iface should automatically detect that implementing WriteCloser[T] means
+# that it must generate a vtable for Closer and Writer[T]
 
 suite "io":
   test "io":
@@ -37,3 +33,5 @@ suite "io":
     var num: int
     writer.write(@['q', 'w'], num)
     check num == 2
+    var closer = writer.to(WriteCloser[char])
+    closer.close()

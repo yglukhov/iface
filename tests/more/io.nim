@@ -13,6 +13,12 @@ iface *Writer[T]:
 iface *ReaderFrom[T]:
   proc read_from(w: Writer[T], num: var int)
 
-iface *Closer[T]:
+iface *Closer:
   proc close()
+
+iface *ReadCloser[T] of Reader[T], Closer:
+  discard
+
+iface *WriteCloser[T] of Writer[T], Closer:
+  discard
 
