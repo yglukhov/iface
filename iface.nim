@@ -34,7 +34,7 @@ proc bracketToCall(n: NimNode): NimNode {.compileTime.} =
   else:
     result = n
 
-macro implem*(t: untyped, body: untyped): untyped =
+macro implem*(t: untyped, ifaces: varargs[untyped]): untyped =
   var genericParams: NimNode = nil
 
   if t.kind == nnkBracketExpr:
@@ -49,7 +49,7 @@ macro implem*(t: untyped, body: untyped): untyped =
   #echo genericParams.treeRepr
   let tables = newTree(nnkBracket)
   let t2 = bracketToCall(t)
-  for i, p in body:
+  for i, p in ifaces:
     let p2 = bracketToCall(p)
     let expr = quote:
       ifaceVtable(`t2`, `p2`)

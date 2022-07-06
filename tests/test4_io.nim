@@ -17,9 +17,7 @@ proc write*[T](self: Null[T], buffer: openArray[T], num: var int) =
 #    ifaceVtable(Null[T], Writer[T]),
 #  ]
 
-implem Null[T]:
-  Reader[T]
-  Writer[T]
+implem Null[T], Reader[T], Writer[T]
 
 proc vtables*() =
   echo "foo"
