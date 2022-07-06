@@ -1,12 +1,17 @@
 import macros, tables
 
 type
+  RootVTable* = object of RootObj
+    private_vtables*: proc(this: RootRef): seq[RootRef]
+
   Interface*[VTable] = object
     private_vTable*: ptr VTable
     private_obj*: RootRef
 
   CTWrapper[T] = ref object of RootRef
     v: T
+
+  VTablesProc*[T] = proc(self: T): seq[RootRef]
 
 proc createVTable(VTable: typedesc, T: typedesc): VTable =
   mixin initVTable
@@ -15,6 +20,49 @@ proc createVTable(VTable: typedesc, T: typedesc): VTable =
 proc getVTable(VTable: typedesc, T: typedesc): ptr VTable {.inline.} =
   var tab {.global.} = createVTable(VTable, T)
   addr tab
+
+proc ifaceVtable*(T: typedesc, I: typedesc): RootRef =
+  mixin initVTable
+  let vtable = new(I.VTable)
+  initVTable(vtable[], T)
+  RootRef(vtable)
+
+proc bracketToCall(n: NimNode): NimNode {.compileTime.} =
+  if n.kind == nnkBracketExpr:
+    result = newCall(bindSym("[]", brOpen))
+    n.copyChildrenTo(result)
+  else:
+    result = n
+
+macro implem*(t: untyped, ifaces: varargs[untyped]): untyped =
+  var genericParams: NimNode = nil
+
+  if t.kind == nnkBracketExpr:
+    genericParams = newNimNode(nnkGenericParams)
+    for i in 1 ..< t.len:
+      genericParams.add(newIdentDefs(t[i], newEmptyNode()))
+  else:
+    genericParams = newEmptyNode()
+  #genericParamsToBracket
+
+  #echo t.treeRepr
+  #echo genericParams.treeRepr
+  let tables = newTree(nnkBracket)
+  let t2 = bracketToCall(t)
+  for i, p in ifaces:
+    let p2 = bracketToCall(p)
+    let expr = quote:
+      ifaceVtable(`t2`, `p2`)
+    tables.add(expr)
+  var res = quote:
+    proc vtables*(t: typedesc[`t2`]): seq[RootRef] = @`tables`
+    discard
+    #when not compiles(vtables(`t2`)):
+    #  vtables(`t2`)
+    #  #raise newException(Defect, "Error defining VTable")
+  res[0][2] = genericParams
+  #echo res.treeRepr
+  res
 
 template unpackObj[T](f: RootRef, res: var T) =
   when T is RootRef:
@@ -77,6 +125,15 @@ proc to*[T: ref](i: Interface, t: typedesc[T]): t {.inline.} =
       CTWrapper[t](i.private_obj).v
     else:
       nil
+
+proc to*[T: Interface](i: Interface, t: typedesc[T]): t {.inline.} =
+  ## Extracts concrete type `t` from interface `i`, or `nil` if `i` is not of `t`
+  for idx, vtable in i.private_vTable.private_vtables(i.private_obj).pairs():
+    if vtable of typeof(result.private_vTable):
+      return T(
+        private_vTable: cast[typeof(result.private_vTable)](vtable),
+        private_obj: i.private_obj)
+  nil
 
 proc parseArgs(arg1, arg2, moreArgs: NimNode): tuple[name: string, genericParams: NimNode, isPublic: bool, parents, body: NimNode] =
   var def = arg1
@@ -152,6 +209,26 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
     ifaceDecl = newNimNode(nnkStmtList)
     vTableType = newNimNode(nnkRecList)
 
+  # Add private_vtables to vtable
+  let lambdaCall = newCall(ident"vtables")
+  lambdaCall.add(genericT)
+  let lambdaBody = quote do:
+    var `upackedThis`: `genericT`
+    unpackObj(this, `upackedThis`)
+    when compiles(vtables(`genericT`)):
+      forceReturnValue(seq[RootRef], `lambdaCall`)
+    else:
+      nil
+  vTableConstr.add newAssignment(
+    newDotExpr(tIdent, ident"private_vtables"),
+    newTree(
+      nnkLambda, newEmptyNode(), newEmptyNode(), newEmptyNode(),
+      newTree(nnkFormalParams,
+        newTree(nnkBracketExpr, ident"seq", ident"RootRef"),
+        newIdentDefs(ident"this", ident"RootRef")),
+      newEmptyNode(), newEmptyNode(),
+      lambdaBody))
+
   for i, p in body:
     if p.kind in {nnkCommentStmt}: continue
     p.expectKind(nnkProcDef)
@@ -207,7 +284,7 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
   typeSection.add newTree(nnkTypeDef, makePublic(iName, isPublic), genericParams, newTree(nnkBracketExpr, ident"Interface", vTableTypeWithGenericParams))
 
   # Add vTable type definition
-  typeSection.add newTree(nnkTypeDef, vTableTypeName, genericParams, newTree(nnkObjectTy, newEmptyNode(), newEmptyNode(), vTableType))
+  typeSection.add newTree(nnkTypeDef, vTableTypeName, genericParams, newTree(nnkObjectTy, newEmptyNode(), newTree(nnkOfInherit, ident"RootVTable"), vTableType))
 
   let initVTableProc = newProc(makePublic(ident"initVTable", isPublic), params = [newEmptyNode(), newIdentDefs(tIdent, newTree(nnkVarTy, vTableTypeWithGenericParams)), newIdentDefs(genericT, ident"typedesc")])
   initVTableProc[2] = genericParams
