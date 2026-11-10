@@ -59,7 +59,7 @@ proc getInterfaceKey(sym: NimNode): string =
 macro registerInterfaceDecl(sym: typed, body, constr: untyped) =
   interfaceReflection[getInterfaceKey(sym)] = InterfaceReflection(body: body, constr: constr)
 
-proc to*[T: ref](a: T, I: typedesc[Interface]): I {.inline.} =
+proc to*[T: ref or Interface](a: T, I: typedesc[Interface]): I {.inline.} =
   when T is I:
     a
   else:
@@ -222,7 +222,7 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
 
   if addConverter and genericParams.kind == nnkEmpty:
     result.add quote do:
-      converter `converterName`[T: ref](a: T): `iName` {.inline.} =
+      converter `converterName`[T: ref or Interface](a: T): `iName` {.inline.} =
         to(a, `iName`)
 
   result.add quote do:
