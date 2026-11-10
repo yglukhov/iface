@@ -1,3 +1,5 @@
+{.experimental: "views".}
+
 import macros, tables
 
 type
@@ -131,6 +133,9 @@ proc makePublic(name: NimNode, isPublic: bool): NimNode =
   else:
     name
 
+proc returnsOpenArray(n: NimNode): bool {.inline.} =
+  n.kind == nnkBracketExpr and n.len == 2 and n[0].kind == nnkIdent and $n[0] == "openArray"
+
 proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, body: NimNode, addConverter: bool): NimNode =
   result = newNimNode(nnkStmtList)
 
@@ -166,7 +171,15 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
     vTableType.add(newIdentDefs(makePublic(fieldName, isPublic), pt))
 
     let lambdaCall = newCall(p.name)
-    lambdaCall.add(upackedThis)
+    if retType.returnsOpenArray():
+      let unwrapped = quote do:
+        when `genericT` is RootRef:
+          `genericT`(this)
+        else:
+          CTWrapper[`genericT`](this).v
+      lambdaCall.add(unwrapped)
+    else:
+      lambdaCall.add(upackedThis)
 
     let vCall = newTree(nnkCall, newTree(nnkDotExpr, newTree(nnkDotExpr, ident"this", ident"private_vTable"), fieldName))
     vCall.add(newTree(nnkDotExpr, ident"this", ident"private_obj"))
@@ -177,10 +190,15 @@ proc ifaceImpl*(name: string, genericParams: NimNode, isPublic: bool, parents, b
         lambdaCall.add(par[b])
         vCall.add(par[b])
 
-    let lambdaBody = quote do:
-      var `upackedThis`: `genericT`
-      unpackObj(this, `upackedThis`)
-      forceReturnValue(`retType`, checkRequiredMethod(`lambdaCall`, `iName`))
+    let lambdaBody =
+      if retType.returnsOpenArray():
+        quote do:
+          forceReturnValue(`retType`, checkRequiredMethod(`lambdaCall`, `iName`))
+      else:
+        quote do:
+          var `upackedThis`: `genericT`
+          unpackObj(this, `upackedThis`)
+          forceReturnValue(`retType`, checkRequiredMethod(`lambdaCall`, `iName`))
 
     let lam = newTree(nnkLambda, newEmptyNode(), newEmptyNode(), newEmptyNode(), pt[0], newEmptyNode(), newEmptyNode(), lambdaBody)
     # lam.addPragma(newTree(nnkExprColonExpr, ident"stackTrace", ident"off"))
